@@ -1,7 +1,7 @@
 name: Build DistAI APK
 
 on:
-  workflow_dispatch: # 支持在网页端手动点击触发
+  workflow_dispatch:
 
 jobs:
   build:
@@ -17,11 +17,10 @@ jobs:
           distribution: 'temurin'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4   # 🔑 关键修复：v3 → v4
 
       - name: Install NDK r29 & CMake
         run: |
-          # 安装官方测试通过的 NDK r29，并指定 cmake 版本
           yes | sdkmanager --install "ndk;29.0.14033894" "cmake;3.22.1"
           echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.14033894" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14033894" >> $GITHUB_ENV
@@ -33,7 +32,6 @@ jobs:
 
       - name: Build ARM native binaries
         run: |
-          # 这是 DistAi 构建的关键前置步骤，生成底层二进制
           if [ -f native/build-android.sh ]; then ./native/build-android.sh; fi
 
       - name: Build Debug APK
