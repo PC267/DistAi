@@ -1,0 +1,46 @@
+name: Build DistAI APK
+
+on:
+  workflow_dispatch: # 支持在网页端手动点击触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK r29 & CMake
+        run: |
+          # 安装官方测试通过的 NDK r29，并指定 cmake 版本
+          yes | sdkmanager --install "ndk;29.0.14033894" "cmake;3.22.1"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.14033894" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14033894" >> $GITHUB_ENV
+
+      - name: Grant execute permission for gradlew & build script
+        run: |
+          chmod +x gradlew
+          if [ -f native/build-android.sh ]; then chmod +x native/build-android.sh; fi
+
+      - name: Build ARM native binaries
+        run: |
+          # 这是 DistAi 构建的关键前置步骤，生成底层二进制
+          if [ -f native/build-android.sh ]; then ./native/build-android.sh; fi
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: distai-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
