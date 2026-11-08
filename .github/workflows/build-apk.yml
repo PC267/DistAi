@@ -12,12 +12,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 🔑 关键新增：手动克隆 llama.cpp 源码到指定目录
+      # 🔑 关键修改：指定克隆特定的 commit
       - name: Manually clone llama.cpp
         run: |
           mkdir -p native
-          # 克隆官方仓库到 native/llama.cpp
-          git clone --depth 1 https://github.com/ggerganov/llama.cpp.git native/llama.cpp
+          # 克隆完整的仓库（因为浅克隆可能无法检出旧的 commit）
+          git clone https://github.com/ggerganov/llama.cpp.git native/llama.cpp
+          cd native/llama.cpp
+          # 强制切换到 DistAI 所需的版本
+          git checkout 69f201a
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -33,7 +36,6 @@ jobs:
           yes | sdkmanager --install "ndk;27.0.12077973" "cmake;3.22.1"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
-          # 软链接防止脚本去找旧版本的 NDK
           ln -s $ANDROID_HOME/ndk/27.0.12077973 $ANDROID_HOME/ndk/29.0.14033894
 
       - name: Grant execute permission for gradlew & build script
