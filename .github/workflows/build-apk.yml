@@ -9,6 +9,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 🔑 关键新增：手动克隆 llama.cpp 源码到指定目录
+      - name: Manually clone llama.cpp
+        run: |
+          mkdir -p native
+          # 克隆官方仓库到 native/llama.cpp
+          git clone --depth 1 https://github.com/ggerganov/llama.cpp.git native/llama.cpp
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -21,15 +30,10 @@ jobs:
 
       - name: Install NDK & CMake
         run: |
-          # 1. 安装目前官方可用的稳定版 NDK (r27) 和 CMake
           yes | sdkmanager --install "ndk;27.0.12077973" "cmake;3.22.1"
-          
-          # 2. 设置环境变量
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
-          
-          # 3. 【关键防御】创建一个软链接，防止项目源码里写死了旧版本号 29.0.14033894
-          # 这样即使脚本去找 29.0.14033894，实际上用的也是 27 版
+          # 软链接防止脚本去找旧版本的 NDK
           ln -s $ANDROID_HOME/ndk/27.0.12077973 $ANDROID_HOME/ndk/29.0.14033894
 
       - name: Grant execute permission for gradlew & build script
