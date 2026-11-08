@@ -17,13 +17,20 @@ jobs:
           distribution: 'temurin'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v4   # 🔑 关键修复：v3 → v4
+        uses: android-actions/setup-android@v4
 
-      - name: Install NDK r29 & CMake
+      - name: Install NDK & CMake
         run: |
-          yes | sdkmanager --install "ndk;29.0.14033894" "cmake;3.22.1"
-          echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.14033894" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14033894" >> $GITHUB_ENV
+          # 1. 安装目前官方可用的稳定版 NDK (r27) 和 CMake
+          yes | sdkmanager --install "ndk;27.0.12077973" "cmake;3.22.1"
+          
+          # 2. 设置环境变量
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
+          
+          # 3. 【关键防御】创建一个软链接，防止项目源码里写死了旧版本号 29.0.14033894
+          # 这样即使脚本去找 29.0.14033894，实际上用的也是 27 版
+          ln -s $ANDROID_HOME/ndk/27.0.12077973 $ANDROID_HOME/ndk/29.0.14033894
 
       - name: Grant execute permission for gradlew & build script
         run: |
