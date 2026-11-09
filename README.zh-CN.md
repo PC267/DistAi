@@ -6,6 +6,14 @@
 
 DistAI 将普通 ARM64 智能手机（如果你有的话，加上 PC 或树莓派）的 RAM 和 CPU 聚合在一起，来运行一个单台设备无法容纳的大型语言模型。它由一个 Android 应用和一套基于 [llama.cpp](https://github.com/ggml-org/llama.cpp) 及其 **RPC** 后端的 PC 工具组成。
 
+```
+            ┌────────────── Wi-Fi / USB / Ethernet ──────────────┐
+  [Coordinator]  llama-server --rpc ...  :8080 (OpenAI API + chat)
+        │  └─ local worker  ggml-rpc-server :50052
+        ├──► Phone 2   ggml-rpc-server :50052   layers 9-16
+        ├──► Phone 3   ggml-rpc-server :50052   layers 17-24
+        └──► PC / Raspberry Pi / Phone N ...
+```
 
 ## 目标与成果
 
