@@ -12,7 +12,6 @@ import android.provider.OpenableColumns
 import android.provider.Settings
 import android.view.View
 import android.widget.*
-import androidx.activity.result.contract.ActivityResultContracts
 import org.json.JSONObject
 import java.io.File
 import kotlin.concurrent.thread
@@ -60,40 +59,19 @@ class MainActivity : Activity() {
 
     private val prefs by lazy { getSharedPreferences("distai", MODE_PRIVATE) }
     
-    // 当前语言状态
-    private var isZh by lazy { prefs.getBoolean("isZh", true) }
+    // 修复1：不能对 var 使用 by lazy，改为普通初始化
+    private var isZh = true 
+    private val REQ_PICK_MODEL = 1001
 
     private val stateListener: () -> Unit = { render() }
-
-    // 新增：选择本地模型文件的 Launcher
-    private val pickModelLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        uri?.let {
-            thread {
-                try {
-                    val fileName = getFileNameFromUri(it) ?: "local_model_${System.currentTimeMillis()}.gguf"
-                    val destFile = File(ModelStore.list(this).firstOrNull()?.parentFile ?: filesDir, fileName)
-                    contentResolver.openInputStream(it)?.use { input ->
-                        destFile.outputStream().use { output ->
-                            input.copyTo(output)
-                        }
-                    }
-                    runOnUiThread {
-                        refreshModels(destFile)
-                        Toast.makeText(this, if (isZh) "本地模型已导入" else "Local model imported", Toast.LENGTH_SHORT).show()
-                    }
-                } catch (e: Exception) {
-                    runOnUiThread {
-                        Toast.makeText(this, if (isZh) "导入失败: ${e.message}" else "Import failed: ${e.message}", Toast.LENGTH_LONG).show()
-                    }
-                }
-            }
-        }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         
+        // 初始化语言状态
+        isZh = prefs.getBoolean("isZh", true)
+
         info = findViewById(R.id.info)
         statusCard = findViewById(R.id.statusCard)
         statusText = findViewById(R.id.statusText)
@@ -164,12 +142,16 @@ class MainActivity : Activity() {
         chatBtn.setOnClickListener { startActivity(Intent(this, ChatActivity::class.java)) }
         findViewById<Button>(R.id.clearLog).setOnClickListener { NodeState.clearLog() }
         
-        // 绑定浏览本地模型按钮
+        // 修复2：使用传统的 startActivityForResult 替代 AndroidX 的 launcher
         findViewById<Button>(R.id.browseModel).setOnClickListener {
-            pickModelLauncher.launch("*/*")
+            val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "*/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+            }
+            startActivityForResult(intent, REQ_PICK_MODEL)
         }
 
-        // 国旗点击事件：切换语言并保存状态，立刻重绘界面
+        // 国旗点击事件
         findViewById<View>(R.id.flagZh).setOnClickListener {
             if (!isZh) {
                 isZh = true
@@ -203,10 +185,37 @@ class MainActivity : Activity() {
             NodeService.send(this, NodeService.ACTION_WORKER_START)
         }
         
-        applyLanguage() // 初始化语言
+        applyLanguage()
     }
 
-    // 动态设置所有静态 UI 的文字
+    // 接收文件选择结果
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_PICK_MODEL && resultCode == Activity.RESULT_OK) {
+            data?.data?.let { uri ->
+                thread {
+                    try {
+                        val fileName = getFileNameFromUri(uri) ?: "local_model_${System.currentTimeMillis()}.gguf"
+                        val destFile = File(ModelStore.list(this).firstOrNull()?.parentFile ?: filesDir, fileName)
+                        contentResolver.openInputStream(uri)?.use { input ->
+                            destFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        runOnUiThread {
+                            refreshModels(destFile)
+                            Toast.makeText(this, if (isZh) "本地模型已导入" else "Local model imported", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        runOnUiThread {
+                            Toast.makeText(this, if (isZh) "导入失败: ${e.message}" else "Import failed: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private fun applyLanguage() {
         findViewById<View>(R.id.flagZh).alpha = if (isZh) 1f else 0.35f
         findViewById<View>(R.id.flagEn).alpha = if (isZh) 0.35f else 1f
@@ -242,7 +251,6 @@ class MainActivity : Activity() {
         findViewById<TextView>(R.id.logTitle).text = if (isZh) "日志" else "Log"
         findViewById<Button>(R.id.clearLog).text = if (isZh) "清空" else "Clear"
         
-        // 更新节点标题的默认显示
         nodesTitle.text = if (isZh) "发现节点: 0" else "Nodes found: 0"
     }
 
@@ -498,7 +506,6 @@ class MainActivity : Activity() {
 
     data class RemoteModel(val name: String, val size: Long, val node: Node)
 
-    // 辅助函数：从 Uri 获取文件名
     private fun getFileNameFromUri(uri: Uri): String? {
         var result: String? = null
         if (uri.scheme == "content") {
