@@ -1,3 +1,5 @@
+[English](README.md) | **简体中文**
+
 <p align="center"><img src="docs/banner.png" alt="DistAI：在多部安卓手机上运行同一个大语言模型" width="100%"></p>
 
 # DistAI：在多部安卓手机上运行同一个大语言模型
