@@ -3,6 +3,7 @@ package com.distai.app
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -141,13 +142,35 @@ class MainActivity : Activity() {
         chatBtn.setOnClickListener { startActivity(Intent(this, ChatActivity::class.java)) }
         findViewById<Button>(R.id.clearLog).setOnClickListener { NodeState.clearLog() }
         
-        // 使用传统的 startActivityForResult 替代 AndroidX 的 launcher
+        // 浏览本地文件
         findViewById<Button>(R.id.browseModel).setOnClickListener {
             val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
                 type = "*/*"
                 addCategory(Intent.CATEGORY_OPENABLE)
             }
             startActivityForResult(intent, REQ_PICK_MODEL)
+        }
+        
+        // 删除本地模型
+        findViewById<Button>(R.id.deleteModel).setOnClickListener {
+            val item = modelItems.getOrNull(modelSpinner.selectedItemPosition)
+            if (item is File) {
+                AlertDialog.Builder(this)
+                    .setTitle(if (isZh) "删除模型" else "Delete Model")
+                    .setMessage(if (isZh) "确定要永久删除 ${item.name} 吗？" else "Are you sure you want to permanently delete ${item.name}?")
+                    .setPositiveButton(if (isZh) "删除" else "Delete") { _, _ ->
+                        if (item.exists() && item.delete()) {
+                            refreshModels()
+                            toast(if (isZh) "已删除" else "Deleted")
+                        } else {
+                            toast(if (isZh) "删除失败，可能文件已损坏或无权操作" else "Failed to delete file")
+                        }
+                    }
+                    .setNegativeButton(if (isZh) "取消" else "Cancel", null)
+                    .show()
+            } else {
+                toast(if (isZh) "只能删除本地导入的模型文件 (📁)" else "Can only delete local imported models")
+            }
         }
 
         // 国旗点击事件
@@ -187,7 +210,6 @@ class MainActivity : Activity() {
         applyLanguage()
     }
 
-    // 接收文件选择结果（已修复路径问题）
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_PICK_MODEL && resultCode == Activity.RESULT_OK) {
@@ -195,17 +217,11 @@ class MainActivity : Activity() {
                 thread {
                     try {
                         val fileName = getFileNameFromUri(uri) ?: "local_model_${System.currentTimeMillis()}.gguf"
-                        
-                        // 【修复核心】：如果已有模型，取已有模型的父目录；如果没有，自动创建标准的 Android/data/包名/files/models
                         val destDir = ModelStore.list(this).firstOrNull()?.parentFile 
                             ?: File(getExternalFilesDir(null), "models").also { if (!it.exists()) it.mkdirs() }
-                            
                         val destFile = File(destDir, fileName)
-                        
                         contentResolver.openInputStream(uri)?.use { input ->
-                            destFile.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
+                            destFile.outputStream().use { output -> input.copyTo(output) }
                         }
                         runOnUiThread {
                             refreshModels(destFile)
@@ -302,6 +318,8 @@ class MainActivity : Activity() {
         coordBtn.backgroundTintList = android.content.res.ColorStateList.valueOf(
             if (NodeState.coordinatorRunning) 0xFFC62828.toInt() else 0xFF2E7D32.toInt())
         chatBtn.isEnabled = NodeState.apiReady
+        
+        // 汉化底层返回的意大利语
         val routerInfo = NodeState.router?.status()?.optJSONArray("replicas")?.let { a ->
             val list = (0 until a.length()).map { a.getJSONObject(it) }
             "\n" + (if (isZh) "副本就绪" else "Replicas ready") + " ${list.count { it.optBoolean("healthy") }}/${list.size}: " +
@@ -315,7 +333,14 @@ class MainActivity : Activity() {
             NodeState.coordinatorRunning -> (if (isZh) "⏳ 正在向节点分发模型..." else "⏳ Distributing model...") + " (${NodeState.coordinatorInfo})$routerInfo"
             else -> ""
         } + if (NodeState.planInfo.isNotEmpty() && (NodeState.coordinatorRunning || NodeState.router != null))
-            "\n\n📋 ${NodeState.planInfo}" else ""
+            "\n\n📋 " + NodeState.planInfo
+                .replace("piano: ", if (isZh) "计划: " else "plan: ")
+                .replace(" questo telefono ", if (isZh) " 此设备 " else " this phone ")
+                .replace(" stimato", if (isZh) " 预估" else " est")
+                .replace(" necessario per la RAM", if (isZh) " (需要内存)" else " (RAM required)")
+                .replace("troppo poco per ", if (isZh) "内存不足: " else "too little for ")
+                .replace(Regex("su (\\d+) nodi")) { match -> if (isZh) "在 ${match.groupValues[1]} 个节点上" else "on ${match.groupValues[1]} nodes" }
+            else ""
             
         logView.text = NodeState.logText().lines().takeLast(40).joinToString("\n")
     }
@@ -590,13 +615,27 @@ class MainActivity : Activity() {
 
     private fun onCoordinator() {
         if (NodeState.coordinatorRunning) {
-            thread { Cluster(this).stop() }
-            NodeService.send(this, NodeService.ACTION_REPLICA_STOP)
-            val hosts = replicaHosts
-            replicaHosts = emptyList()
-            thread { hosts.forEach { StatusServer.post(it, "/replica/stop") } }
+            // 【修复】：加入 try-catch 防止停止时抛出异常导致 App 闪退退出
+            thread {
+                try {
+                    Cluster(this).stop()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                
+                NodeService.send(this, NodeService.ACTION_REPLICA_STOP)
+                
+                val hosts = replicaHosts
+                replicaHosts = emptyList()
+                try {
+                    hosts.forEach { StatusServer.post(it, "/replica/stop") }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
             return
         }
+        
         val item = modelItems.getOrNull(modelSpinner.selectedItemPosition)
         val remote = item as? RemoteModel
         val model = item as? File ?: remote?.let { File(cacheDir, it.name) }
