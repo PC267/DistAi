@@ -1,3 +1,5 @@
+**English** | [简体中文](README.zh-CN.md)
+
 <p align="center"><img src="docs/banner.png" alt="DistAI: one LLM across several Android phones" width="100%"></p>
 
 # DistAI: one LLM across several Android phones
