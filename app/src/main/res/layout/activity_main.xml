@@ -33,7 +33,6 @@
                 android:textStyle="bold" />
             <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
             
-            <!-- 这里已将意大利国旗替换为中国国旗，并将 ID 改为 flagZh -->
             <TextView
                 android:id="@+id/flagZh"
                 android:layout_width="wrap_content"
@@ -41,7 +40,6 @@
                 android:padding="8dp"
                 android:text="🇨🇳"
                 android:textSize="26sp" />
-                
             <TextView
                 android:id="@+id/flagEn"
                 android:layout_width="wrap_content"
@@ -51,7 +49,6 @@
                 android:textSize="26sp" />
         </LinearLayout>
 
-        <!-- STATUS: at a glance if the cluster is connected, the model loaded and this phone at work -->
         <LinearLayout
             android:id="@+id/statusCard"
             style="@style/Card"
@@ -69,7 +66,10 @@
                     android:text="●"
                     android:textColor="#9E9E9E"
                     android:textSize="18sp" />
-                <TextView android:id="@+id/statusTitle" style="@style/Title" android:text="CLUSTER STATUS / 集群状态" />
+                <TextView 
+                    android:id="@+id/statusTitle" 
+                    style="@style/Title" 
+                    android:text="CLUSTER STATUS" />
             </LinearLayout>
             <TextView
                 android:id="@+id/statusText"
@@ -92,53 +92,53 @@
 
         <!-- WORKER -->
         <LinearLayout style="@style/Card" android:orientation="vertical">
-            <TextView style="@style/Title" android:text="THIS PHONE AS WORKER / 此手机作为工作节点" />
+            <TextView 
+                android:id="@+id/workerTitle" 
+                style="@style/Title" />
             <TextView
-                style="@style/Hint"
-                android:text="Provides CPU and RAM for compute. Enable on all network phones. / 提供CPU和RAM用于计算。请在局域网内所有手机上开启。" />
+                android:id="@+id/workerHint"
+                style="@style/Hint" />
             <Switch
                 android:id="@+id/workerSwitch"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:paddingVertical="8dp"
-                android:text="Worker active / 开启工作节点" />
+                android:paddingVertical="8dp" />
             <CheckBox
                 android:id="@+id/autoStart"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Auto-start worker on app launch / 应用启动时自动运行" />
+                android:layout_height="wrap_content" />
             <CheckBox
                 android:id="@+id/keepScreen"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Keep screen on (prevents standby) / 保持屏幕常亮 (防休眠)" />
+                android:layout_height="wrap_content" />
             <Button
                 android:id="@+id/battery"
                 style="?android:attr/borderlessButtonStyle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Disable battery optimization / 关闭电池优化" />
+                android:textAllCaps="false" />
             <Button
                 android:id="@+id/freeRam"
                 style="?android:attr/borderlessButtonStyle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Free RAM (closes background apps) / 释放内存 (结束后台应用)" />
+                android:textAllCaps="false" />
         </LinearLayout>
 
         <!-- COORDINATOR -->
         <LinearLayout style="@style/Card" android:orientation="vertical">
-            <TextView style="@style/Title" android:text="COORDINATOR / 协调器" />
+            <TextView 
+                android:id="@+id/coordTitle" 
+                style="@style/Title" />
             <TextView
-                style="@style/Hint"
-                android:text="Selects nodes, loads model, and distributes layers across phones. / 选择节点，加载模型并将层分配到各手机。" />
+                android:id="@+id/coordHint"
+                style="@style/Hint" />
 
             <TextView
                 android:id="@+id/nodesTitle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Nodes found: 0 / 发现节点: 0"
                 android:textStyle="bold" />
             <TextView
                 android:id="@+id/nodesLegend"
@@ -158,31 +158,46 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:hint="Manual IP (e.g. 192.168.1.23) / 手动输入IP"
                     android:inputType="text"
                     android:textSize="14sp" />
                 <Button
                     android:id="@+id/addIp"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Add / 添加" />
+                    android:textAllCaps="false" />
             </LinearLayout>
 
+            <!-- 模型选择区 -->
             <TextView
+                android:id="@+id/modelTitle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Model / 模型"
                 android:textStyle="bold" />
-            <Spinner
-                android:id="@+id/model"
+                
+            <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content" />
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <Spinner
+                    android:id="@+id/model"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1" />
+                <!-- 新增的浏览本地文件按钮 -->
+                <Button
+                    android:id="@+id/browseModel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="📁"
+                    android:textSize="18sp" />
+            </LinearLayout>
+
             <EditText
                 android:id="@+id/customUrl"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:hint="...or URL to a .gguf file / ...或输入 .gguf 链接"
                 android:inputType="textUri"
                 android:textSize="14sp" />
             <ProgressBar
@@ -195,7 +210,7 @@
                 android:id="@+id/download"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Download model / 下载模型" />
+                android:textAllCaps="false" />
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -203,9 +218,9 @@
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
                 <TextView
+                    android:id="@+id/ctxTitle"
                     android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Context (tokens): / 上下文: " />
+                    android:layout_height="wrap_content" />
                 <EditText
                     android:id="@+id/ctx"
                     android:layout_width="0dp"
@@ -224,20 +239,17 @@
                     android:id="@+id/modeSplit"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:checked="true"
-                    android:text="Split: large model split across phones / Split模式: 大模型切分至多台手机" />
+                    android:checked="true" />
                 <RadioButton
                     android:id="@+id/modeReplica"
                     android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Replica: model copied to each phone (multi-user) / Replica模式: 模型复制到每台手机 (多用户)" />
+                    android:layout_height="wrap_content" />
             </RadioGroup>
 
             <CheckBox
                 android:id="@+id/moeFast"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Fast MoE: 6 of 8 experts (Qwen3 MoE: +12-25% tok/s, same quality) / 快速MoE: 选8个中的6个专家 (提速12-25%，质量相同)" />
+                android:layout_height="wrap_content" />
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -245,9 +257,9 @@
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
                 <TextView
+                    android:id="@+id/coordChoiceTitle"
                     android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Coordinator: / 协调器: " />
+                    android:layout_height="wrap_content" />
                 <Spinner
                     android:id="@+id/coordChoice"
                     android:layout_width="0dp"
@@ -258,15 +270,15 @@
                 android:id="@+id/benchBtn"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Benchmark node speed / 节点测速" />
+                android:textAllCaps="false" />
 
             <Button
                 android:id="@+id/coordBtn"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:backgroundTint="#2E7D32"
-                android:text="Start Distributed LLM / 启动分布式大模型"
-                android:textColor="#FFFFFF" />
+                android:textColor="#FFFFFF"
+                android:textAllCaps="false" />
             <TextView
                 android:id="@+id/apiStatus"
                 style="@style/Hint"
@@ -276,7 +288,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:enabled="false"
-                android:text="Open chat / 打开对话" />
+                android:textAllCaps="false" />
         </LinearLayout>
 
         <!-- LOG -->
@@ -286,16 +298,16 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal">
                 <TextView
+                    android:id="@+id/logTitle"
                     style="@style/Title"
                     android:layout_width="0dp"
-                    android:layout_weight="1"
-                    android:text="Log / 日志" />
+                    android:layout_weight="1" />
                 <Button
                     android:id="@+id/clearLog"
                     style="?android:attr/borderlessButtonStyle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Clear / 清空" />
+                    android:textAllCaps="false" />
             </LinearLayout>
             <TextView
                 android:id="@+id/log"
