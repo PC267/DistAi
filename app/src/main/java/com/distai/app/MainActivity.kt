@@ -59,7 +59,6 @@ class MainActivity : Activity() {
 
     private val prefs by lazy { getSharedPreferences("distai", MODE_PRIVATE) }
     
-    // 修复1：不能对 var 使用 by lazy，改为普通初始化
     private var isZh = true 
     private val REQ_PICK_MODEL = 1001
 
@@ -142,7 +141,7 @@ class MainActivity : Activity() {
         chatBtn.setOnClickListener { startActivity(Intent(this, ChatActivity::class.java)) }
         findViewById<Button>(R.id.clearLog).setOnClickListener { NodeState.clearLog() }
         
-        // 修复2：使用传统的 startActivityForResult 替代 AndroidX 的 launcher
+        // 使用传统的 startActivityForResult 替代 AndroidX 的 launcher
         findViewById<Button>(R.id.browseModel).setOnClickListener {
             val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
                 type = "*/*"
@@ -188,7 +187,7 @@ class MainActivity : Activity() {
         applyLanguage()
     }
 
-    // 接收文件选择结果
+    // 接收文件选择结果（已修复路径问题）
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_PICK_MODEL && resultCode == Activity.RESULT_OK) {
@@ -196,7 +195,13 @@ class MainActivity : Activity() {
                 thread {
                     try {
                         val fileName = getFileNameFromUri(uri) ?: "local_model_${System.currentTimeMillis()}.gguf"
-                        val destFile = File(ModelStore.list(this).firstOrNull()?.parentFile ?: filesDir, fileName)
+                        
+                        // 【修复核心】：如果已有模型，取已有模型的父目录；如果没有，自动创建标准的 Android/data/包名/files/models
+                        val destDir = ModelStore.list(this).firstOrNull()?.parentFile 
+                            ?: File(getExternalFilesDir(null), "models").also { if (!it.exists()) it.mkdirs() }
+                            
+                        val destFile = File(destDir, fileName)
+                        
                         contentResolver.openInputStream(uri)?.use { input ->
                             destFile.outputStream().use { output ->
                                 input.copyTo(output)
