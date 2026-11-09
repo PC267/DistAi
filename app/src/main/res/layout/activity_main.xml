@@ -185,12 +185,19 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1" />
-                <!-- 新增的浏览本地文件按钮 -->
+                <!-- 浏览本地文件按钮 -->
                 <Button
                     android:id="@+id/browseModel"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="📁"
+                    android:textSize="18sp" />
+                <!-- 新增：删除本地模型按钮 -->
+                <Button
+                    android:id="@+id/deleteModel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🗑️"
                     android:textSize="18sp" />
             </LinearLayout>
 
