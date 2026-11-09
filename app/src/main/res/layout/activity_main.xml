@@ -32,13 +32,16 @@
                 android:textSize="26sp"
                 android:textStyle="bold" />
             <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+            
+            <!-- 这里已将意大利国旗替换为中国国旗，并将 ID 改为 flagZh -->
             <TextView
-                android:id="@+id/flagIt"
+                android:id="@+id/flagZh"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:padding="8dp"
-                android:text="🇮🇹"
+                android:text="🇨🇳"
                 android:textSize="26sp" />
+                
             <TextView
                 android:id="@+id/flagEn"
                 android:layout_width="wrap_content"
