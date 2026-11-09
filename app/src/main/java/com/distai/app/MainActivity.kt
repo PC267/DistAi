@@ -79,9 +79,9 @@ class MainActivity : Activity() {
         statusText = findViewById(R.id.statusText)
         pulse = findViewById(R.id.pulse)
         clusterView = findViewById(R.id.clusterView)
-        Lang.load(this)
-        findViewById<View>(R.id.flagIt).setOnClickListener { Lang.save(this, true); render() }
-        findViewById<View>(R.id.flagEn).setOnClickListener { Lang.save(this, false); render() }
+        
+        // 删除了 Lang.load 和国旗点击事件，防止因找不到 R.id.flagIt 而崩溃
+        
         workerSwitch = findViewById(R.id.workerSwitch)
         nodesTitle = findViewById(R.id.nodesTitle)
         nodesBox = findViewById(R.id.nodes)
@@ -199,22 +199,22 @@ class MainActivity : Activity() {
     private fun render() {
         renderStatus()
         info.text = Native.summary(this) + SelfBench.describe(SelfBench.result).let { if (it.isEmpty()) "" else "\n$it" } +
-            if (SelfBench.running) "\n⏳ bench di questo dispositivo in corso…" else ""
+            if (SelfBench.running) "\n⏳ bench di questo dispositivo in corso… / 设备测速中..." else ""
         workerSwitch.isChecked = NodeState.workerRunning
-        coordBtn.text = if (NodeState.coordinatorRunning) "Ferma LLM distribuito" else "Avvia LLM distribuito"
+        coordBtn.text = if (NodeState.coordinatorRunning) "Stop Distributed LLM / 停止分布式大模型" else "Start Distributed LLM / 启动分布式大模型"
         coordBtn.backgroundTintList = android.content.res.ColorStateList.valueOf(
             if (NodeState.coordinatorRunning) 0xFFC62828.toInt() else 0xFF2E7D32.toInt())
         chatBtn.isEnabled = NodeState.apiReady
         val routerInfo = NodeState.router?.status()?.optJSONArray("replicas")?.let { a ->
             val list = (0 until a.length()).map { a.getJSONObject(it) }
-            "\nRepliche pronte ${list.count { it.optBoolean("healthy") }}/${list.size}: " +
-                list.joinToString(" · ") { "${it.optString("host")} ${if (it.optBoolean("healthy")) "✓" else "…"} (${it.optInt("served")} risp.)" }
+            "\nReplicas ready / 副本就绪 ${list.count { it.optBoolean("healthy") }}/${list.size}: " +
+                list.joinToString(" · ") { "${it.optString("host")} ${if (it.optBoolean("healthy")) "✓" else "…"} (${it.optInt("served")} resp.)" }
         }.orEmpty()
         apiStatus.text = when {
             NodeState.apiReady ->
-                "✅ ${NodeState.coordinatorInfo}\nAPI OpenAI: http://${Native.localIp()}:${Native.API_PORT}/v1 " +
-                    "(usabile anche da PC sulla stessa rete)" + routerInfo
-            NodeState.coordinatorRunning -> "⏳ Distribuzione del modello ai nodi… (${NodeState.coordinatorInfo})$routerInfo"
+                "✅ ${NodeState.coordinatorInfo}\nOpenAI API: http://${Native.localIp()}:${Native.API_PORT}/v1 " +
+                    "(usable from PC on the same network / 局域网PC可用)" + routerInfo
+            NodeState.coordinatorRunning -> "⏳ Distributing model to nodes... / 正在向节点分发模型... (${NodeState.coordinatorInfo})$routerInfo"
             else -> ""
         } + if (NodeState.planInfo.isNotEmpty() && (NodeState.coordinatorRunning || NodeState.router != null))
             "\n\n📋 ${NodeState.planInfo}" else ""
@@ -247,50 +247,46 @@ class MainActivity : Activity() {
             }
         }
         val tok = if (NodeState.apiReady) localTokS else nodes.firstOrNull { it.role == "coordinatore" && it.apiReady }?.tokS ?: 0.0
-        clusterView.set(segs, tok, if (plan != null) "${plan.layers} layer" else Lang.t("pesi nei worker", "weights in workers"))
+        clusterView.set(segs, tok, if (plan != null) "${plan.layers} layer" else "weights in workers / worker 权重")
     }
 
     private fun renderStatus() {
         renderRing()
-        findViewById<TextView>(R.id.statusTitle).text = Lang.t("STATO DEL CLUSTER", "CLUSTER STATUS")
-        findViewById<View>(R.id.flagIt).alpha = if (Lang.it) 1f else 0.35f
-        findViewById<View>(R.id.flagEn).alpha = if (Lang.it) 0.35f else 1f
-        findViewById<TextView>(R.id.statusTitle).text = Lang.t("STATO DEL CLUSTER", "CLUSTER STATUS")
-        findViewById<View>(R.id.flagIt).alpha = if (Lang.it) 1f else 0.35f
-        findViewById<View>(R.id.flagEn).alpha = if (Lang.it) 0.35f else 1f
+        // 删除了原先在这里重复设置语言和国旗透明度的代码
+        
         val myIp = Native.localIp()
         val others = nodeGroups().filter { g -> g.none { isSelf(it, myIp) } }
         val names = others.joinToString(", ") { g -> g.first().name.removePrefix("PC ") }
-        val devices = "📱 " + Lang.t("Dispositivi collegati", "Connected devices") + ": ${others.size + 1}" + if (names.isNotEmpty()) Lang.t(" (questo + $names)", " (this + $names)") else Lang.t(" (solo questo)", " (this one only)")
+        val devices = "📱 Connected devices / 已连接设备: ${others.size + 1}" + if (names.isNotEmpty()) " (this + $names / 此设备 + $names)" else " (this one only / 仅此设备)"
         val remoteCoord = nodes.firstOrNull { it.role == "coordinatore" && !isSelf(it, myIp) }
         val tok = { t: Double -> if (t > 0) " · ${"%.1f".format(t)} tok/s" else "" }
         val (model, color) = when {
-            NodeState.apiReady -> "🧠 " + Lang.t("Modello operativo", "Model running") + " ✓ · ${NodeState.coordinatorInfo}${tok(localTokS)}" to 0xFFE8F5E9.toInt()
-            NodeState.coordinatorRunning -> "⏳ " + Lang.t("Caricamento del modello sui nodi…", "Loading the model onto the nodes…") + " · ${NodeState.coordinatorInfo}" to 0xFFFFF8E1.toInt()
+            NodeState.apiReady -> "🧠 Model running / 模型运行中 ✓ · ${NodeState.coordinatorInfo}${tok(localTokS)}" to 0xFFE8F5E9.toInt()
+            NodeState.coordinatorRunning -> "⏳ Loading the model onto nodes... / 正在加载模型... · ${NodeState.coordinatorInfo}" to 0xFFFFF8E1.toInt()
             remoteCoord?.apiReady == true ->
-                "🧠 " + Lang.t("Modello operativo", "Model running") + " ✓ · ${remoteCoord.name}${tok(remoteCoord.tokS)}" to 0xFFE8F5E9.toInt()
-            remoteCoord != null -> "⏳ ${remoteCoord.name} " + Lang.t("sta caricando il modello", "is loading the model") to 0xFFFFF8E1.toInt()
-            else -> "⚪ " + Lang.t("Nessun modello avviato", "No model started") to 0xFFFFFFFF.toInt()
+                "🧠 Model running / 模型运行中 ✓ · ${remoteCoord.name}${tok(remoteCoord.tokS)}" to 0xFFE8F5E9.toInt()
+            remoteCoord != null -> "⏳ ${remoteCoord.name} is loading model / 正在加载模型" to 0xFFFFF8E1.toInt()
+            else -> "⚪ No model started / 未启动模型" to 0xFFFFFFFF.toInt()
         }
         val busy = WorkerStats.clients > 0
         val worker = when {
-            !NodeState.workerRunning -> "⏸ " + Lang.t("Worker di questo telefono spento", "This phone's worker is off")
-            busy -> "⚙️ " + Lang.t("Questo telefono lavora per il cluster · pesi", "This phone is working for the cluster · weights") + " ${gb(WorkerStats.rssMb)} · CPU ${WorkerStats.cpuPct}%"
-            else -> "💤 " + Lang.t("Worker pronto, in attesa di un coordinatore", "Worker ready, waiting for a coordinator")
+            !NodeState.workerRunning -> "⏸ This phone's worker is off / 此手机的 Worker 已关闭"
+            busy -> "⚙️ Working for cluster / 正在为集群工作 · weights / 权重 ${gb(WorkerStats.rssMb)} · CPU ${WorkerStats.cpuPct}%"
+            else -> "💤 Worker ready, waiting for coordinator / Worker 就绪，等待协调器"
         }
         // telefoni che il PC espone col ponte USB (tools/pcnode.py): funzionano, ma ogni token passa anche dal PC
         val viaPc = others.map { it.first().name }.filter { it.endsWith("(USB del PC)") }
         val hint = if (viaPc.isEmpty()) null else
-            "🔌 ${viaPc.joinToString { it.removeSuffix(" (USB del PC)") }} collegato tramite il PC (USB): " +
-                "per meno latenza attiva il Tethering USB o mettilo sulla stessa rete"
+            "🔌 ${viaPc.joinToString { it.removeSuffix(" (USB del PC)") }} connected via PC (USB): " +
+                "for less latency enable USB Tethering or put on the same network / 建议开启USB网络共享"
         // questo telefono vede gli altri solo via cavo: tipicamente è su un'altra rete Wi-Fi
         val onlyUsb = if (others.isNotEmpty() && others.all { g -> g.all { it.usb } })
-            "🔌 Collegato al cluster solo via USB tramite il PC: va bene se è l'unico telefono; " +
-                "per lavorare insieme agli altri telefoni mettilo sulla loro stessa rete" else null
+            "🔌 Connected to cluster only via USB: fine if it's the only phone; " +
+                "put it on the same network to work with other phones / 仅通过USB连接，建议置于同一局域网" else null
         // misurato col Samsung (13/10/2026): cavo 30-237 MB/s (tethering, adb aggiornato), Wi-Fi 2 MB/s: la banda decide prompt e pesi
         val wired = if (others.isNotEmpty() && !Native.wiredLink() && others.none { g -> g.any { it.usb || it.cable } })
-            "💡 Consigliato un cavo: USB verso il PC con DistAI, Tethering USB o un adattatore di rete USB-C: " +
-                "da 15 a 100 volte la banda del Wi-Fi" else null
+            "💡 Cable recommended: USB to PC with DistAI, USB Tethering or USB-C network adapter: " +
+                "15 to 100 times the Wi-Fi bandwidth / 推荐使用线缆直连" else null
         statusText.text = listOfNotNull(devices, model, worker, hint, onlyUsb, wired).joinToString("\n")
         statusCard.backgroundTintList = android.content.res.ColorStateList.valueOf(color)
         val active = NodeState.coordinatorRunning || (busy && WorkerStats.cpuPct >= 10)
@@ -326,8 +322,8 @@ class MainActivity : Activity() {
         // RAM contata una volta per dispositivo, anche se ha due canali
         sel.groupBy { it.devId.ifEmpty { it.endpoint } }.values.forEach { ram += it.first().freeMb }
         val devices = sel.map { it.devId.ifEmpty { it.endpoint } }.distinct().size
-        nodesTitle.text = "Nodi trovati: ${groups.size} · selezionati $devices" +
-            if (ram > 0) " · RAM libera ≈ ${"%.1f".format(ram / 1024.0)} GB" else ""
+        nodesTitle.text = "Nodes found: ${groups.size} / 发现节点: ${groups.size} · selected / 已选: $devices" +
+            if (ram > 0) " · RAM ≈ ${"%.1f".format(ram / 1024.0)} GB" else ""
         renderCoordChoice()
     }
 
@@ -366,7 +362,7 @@ class MainActivity : Activity() {
         val rtt = g.mapNotNull { Cluster.bench[it.endpoint]?.rttMs }.minOrNull()?.let { " · rtt ${"%.0f".format(it)} ms" }.orEmpty()
         // attività vista dal suo /status: un coordinatore collegato al worker = il nodo sta lavorando per il cluster
         val act = g.maxByOrNull { it.clients }?.takeIf { it.clients > 0 }
-            ?.let { "\n● in uso · pesi ${gb(it.workMb)} · CPU ${it.cpuPct}%" }.orEmpty()
+            ?.let { "\n● in use / 使用中 · weights ${gb(it.workMb)} · CPU ${it.cpuPct}%" }.orEmpty()
         return "${n.name}\n${g.joinToString(" + ") { it.endpoint }}$mem" +
             "${if (n.cpu.isNotEmpty()) " · ${n.cpu}" else ""}$role$speed$rtt$act"
     }
@@ -388,7 +384,7 @@ class MainActivity : Activity() {
             .distinctBy { it.devId }
         val keys = listOf(Cluster.COORD_AUTO, Cluster.COORD_SELF) + coordNodes.map { it.devId }
         if (keys == coordKeys) return // non ricreo il menu a ogni aggiornamento: perderebbe la scelta aperta
-        val labels = listOf("Automatico (PC se c'è, altrimenti il più veloce)", "Questo telefono") +
+        val labels = listOf("Auto (PC if available, else fastest) / 自动 (优先PC，否则最快)", "This phone / 此手机") +
             coordNodes.map { "${it.name}${if (it.x86) " (PC)" else ""}" }
         coordKeys = keys
         coordChoice.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
@@ -400,16 +396,16 @@ class MainActivity : Activity() {
     private fun clusterNodes(): Pair<Node, List<Node>> {
         val myIp = Native.localIp()
         val self = Discovery.refresh(Node("127.0.0.1", Native.RPC_PORT, Native.deviceName()))
-            .copy(name = "${Native.deviceName()} (questo)", freeMb = Native.memInfo(this).second)
+            .copy(name = "${Native.deviceName()} (questo / this)", freeMb = Native.memInfo(this).second)
         val others = selectedNodes().filter { !isSelf(it, myIp) }.filter { n ->
-            Discovery.reachable(n).also { if (!it) NodeState.log("coord", "nodo non raggiungibile: ${n.endpoint}") }
+            Discovery.reachable(n).also { if (!it) NodeState.log("coord", "node unreachable / 节点无法访问: ${n.endpoint}") }
         }.map { Discovery.refresh(it) }
         return self to others
     }
 
     private fun onBench() {
-        if (NodeState.coordinatorRunning) return toast("Ferma prima l'LLM: i worker servono un client alla volta")
-        toast("Misuro i nodi (circa 1 s ciascuno)…")
+        if (NodeState.coordinatorRunning) return toast("Stop the LLM first / 请先停止 LLM")
+        toast("Benchmarking nodes (about 1s each)… / 正在测试节点速度 (每个约1秒)…")
         thread(name = "bench") {
             val (self, others) = clusterNodes()
             Cluster(this).measure(listOf(self) + others)
@@ -446,7 +442,7 @@ class MainActivity : Activity() {
         val labels = items.map {
             when (it) {
                 is File -> "📁 ${it.name} (${"%.1f".format(it.length() / 1e9)} GB)"
-                is RemoteModel -> "🖥 ${it.name} (${"%.1f".format(it.size / 1e9)} GB, sul ${it.node.name.removeSuffix(" (USB)").removeSuffix(" (cavo)")})"
+                is RemoteModel -> "🖥 ${it.name} (${"%.1f".format(it.size / 1e9)} GB, on / 在 ${it.node.name.removeSuffix(" (USB)").removeSuffix(" (cavo)")})"
                 else -> "⬇ ${(it as ModelStore.Preset).label}"
             }
         }
@@ -465,9 +461,9 @@ class MainActivity : Activity() {
         val url = customUrl.text.toString().trim().ifEmpty {
             (modelItems.getOrNull(modelSpinner.selectedItemPosition) as? ModelStore.Preset)?.url
         }
-        if (url == null) { toast("Il modello selezionato è già sul telefono"); return }
+        if (url == null) { toast("The selected model is already on the phone / 所选模型已在手机上"); return }
         downloading = true
-        downloadBtn.text = "Annulla download"
+        downloadBtn.text = "Cancel download / 取消下载"
         progress.visibility = View.VISIBLE
         progress.isIndeterminate = true
         thread(name = "download") {
@@ -479,16 +475,16 @@ class MainActivity : Activity() {
                             progress.max = 1000
                             progress.progress = (done * 1000 / total).toInt()
                         }
-                        downloadBtn.text = "Annulla download (${done / 1048576} / ${if (total > 0) total / 1048576 else "?"} MB)"
+                        downloadBtn.text = "Cancel / 取消下载 (${done / 1048576} / ${if (total > 0) total / 1048576 else "?"} MB)"
                     }
                 }
             }
             runOnUiThread {
                 downloading = false
-                downloadBtn.text = "Scarica modello"
+                downloadBtn.text = "Download model / 下载模型"
                 progress.visibility = View.GONE
-                result.onSuccess { customUrl.text.clear(); refreshModels(it); toast("Scaricato ${it.name}") }
-                    .onFailure { toast("Errore download: ${it.message}") }
+                result.onSuccess { customUrl.text.clear(); refreshModels(it); toast("Downloaded / 已下载 ${it.name}") }
+                    .onFailure { toast("Download error / 下载错误: ${it.message}") }
             }
         }
     }
@@ -507,12 +503,12 @@ class MainActivity : Activity() {
         val item = modelItems.getOrNull(modelSpinner.selectedItemPosition)
         val remote = item as? RemoteModel
         val model = item as? File ?: remote?.let { File(cacheDir, it.name) }
-            ?: return toast("Seleziona un modello già scaricato (📁) o presente sul PC (🖥)")
+            ?: return toast("Select a downloaded model / 请选择已下载的模型")
         val ctx = ctxField.text.toString().toIntOrNull()?.coerceIn(512, 131072) ?: 4096
         prefs.edit().putInt("ctx", ctx).apply()
 
         if (modeReplica.isChecked) {
-            if (remote != null) return toast("Le repliche copiano il modello da questo telefono: scaricalo prima (📁)")
+            if (remote != null) return toast("Download model first for replica / 请先下载模型再使用副本模式")
             return startReplicas(model, ctx)
         }
         val choice = prefs.getString("coord", Cluster.COORD_AUTO) ?: Cluster.COORD_AUTO
@@ -522,16 +518,16 @@ class MainActivity : Activity() {
             val cluster = Cluster(this)
             // modello del PC: leggo solo l'intestazione e il PC fa da coordinatore con il suo file
             val remoteInfo = remote?.let { r ->
-                NodeState.log("cluster", "${r.name} è sul ${r.node.name}: leggo l'intestazione, il PC farà da coordinatore")
+                NodeState.log("cluster", "${r.name} is on / 位于 ${r.node.name}: reading header, PC will coordinate / 正在读取头部，PC将作为协调器")
                 Cluster.remoteInfo(r.node, r.name, r.size, cacheDir)?.second?.let { it to r.node.devId }
-                    ?: run { NodeState.log("cluster", "intestazione di ${r.name} non leggibile dal PC"); null }
+                    ?: run { NodeState.log("cluster", "cannot read header of / 无法读取头部 ${r.name}"); null }
             }
             val start = if (remote != null && remoteInfo == null) null
                 else cluster.plan(model, ctx, self, others, choice, remoteInfo)
             runOnUiThread {
                 coordBtn.isEnabled = true
                 renderNodes()
-                if (start == null) toast("Avvio non riuscito: vedi il log")
+                if (start == null) toast("Start failed, see log / 启动失败，请查看日志")
             }
             if (start != null) {
                 // MoE veloce: solo per l'architettura provata (qwen3moe: 21/22 compiti con 6 esperti, come con 8)
@@ -548,7 +544,7 @@ class MainActivity : Activity() {
      * da questo telefono via LAN (/files) se non ce l'hanno, e il router smista gli utenti.
      */
     private fun startReplicas(model: File, ctx: Int) {
-        val myIp = Native.localIp() ?: return toast("Nessuna rete")
+        val myIp = Native.localIp() ?: return toast("No network / 无网络")
         val candidates = selectedNodes().filter { it.host != myIp && it.host != "127.0.0.1" }
         coordBtn.isEnabled = false
         thread(name = "replicas") {
@@ -557,7 +553,7 @@ class MainActivity : Activity() {
             val localOk = fits(Native.memInfo(this).second)
             val remote = candidates.map { Discovery.refresh(it) }.filter { n ->
                 val ok = Discovery.reachable(n) && fits(n.freeMb)
-                if (!ok) NodeState.log("coord", "${n.host} escluso: non raggiungibile o RAM insufficiente (${n.freeMb} MB liberi)")
+                if (!ok) NodeState.log("coord", "${n.host} excluded / 已排除: unreachable or insufficient RAM / 无法访问或内存不足 (${n.freeMb} MB free)")
                 ok
             }
             val source = "http://$myIp:${Native.STATUS_PORT}/files/${Uri.encode(model.name)}"
@@ -567,10 +563,10 @@ class MainActivity : Activity() {
             }.map { it.host }
             runOnUiThread {
                 coordBtn.isEnabled = true
-                if (info == null) return@runOnUiThread toast("File GGUF non leggibile")
+                if (info == null) return@runOnUiThread toast("Cannot read GGUF / 无法读取 GGUF 文件")
                 val hosts = (if (localOk) listOf("127.0.0.1") else emptyList()) + started
-                if (hosts.isEmpty()) return@runOnUiThread toast("Il modello non entra in nessun telefono: usa la modalità Split")
-                if (!localOk) NodeState.log("coord", "questo telefono non ha RAM per la replica: fa solo da router")
+                if (hosts.isEmpty()) return@runOnUiThread toast("Model doesn't fit, use Split mode / 内存不足，请使用拆分模式")
+                if (!localOk) NodeState.log("coord", "this phone has no RAM for replica: router only / 此手机内存不足，仅作为路由")
                 replicaHosts = started
                 Keepalive.pin(started)
                 if (localOk) NodeService.send(this, NodeService.ACTION_REPLICA_START) {
@@ -581,7 +577,7 @@ class MainActivity : Activity() {
                     putStringArrayListExtra(NodeService.EXTRA_HOSTS, ArrayList(hosts))
                     putExtra(NodeService.EXTRA_MODEL, model.name)
                 }
-                NodeState.log("coord", "repliche avviate su: ${hosts.joinToString()}")
+                NodeState.log("coord", "replicas started on / 副本已启动于: ${hosts.joinToString()}")
             }
         }
     }
@@ -592,7 +588,7 @@ class MainActivity : Activity() {
     /** Chiude i processi in background delle altre app e mostra quanta RAM disponibile si è guadagnata (serve prima di caricare un modello). */
     private fun onFreeRam(btn: Button) {
         btn.isEnabled = false
-        toast("Libero la RAM…")
+        toast("Freeing RAM... / 正在释放内存...")
         thread {
             val r = MemoryCleaner.free(this)
             runOnUiThread { btn.isEnabled = true; toast(r.describe()) }
@@ -601,7 +597,7 @@ class MainActivity : Activity() {
 
     private fun askBatteryExemption() {
         val pm = getSystemService(POWER_SERVICE) as PowerManager
-        if (pm.isIgnoringBatteryOptimizations(packageName)) return toast("Già esclusa dall'ottimizzazione")
+        if (pm.isIgnoringBatteryOptimizations(packageName)) return toast("Already exempt / 已忽略电池优化")
         startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
     }
 
