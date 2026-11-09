@@ -8,19 +8,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.view.View
-import android.widget.ArrayAdapter
-import android.widget.Button
-import android.widget.CheckBox
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.ProgressBar
-import android.widget.RadioButton
-import android.widget.Spinner
-import android.widget.Switch
-import android.widget.TextView
-import android.widget.Toast
+import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
 import org.json.JSONObject
 import java.io.File
 import kotlin.concurrent.thread
@@ -33,14 +25,6 @@ class MainActivity : Activity() {
     private lateinit var statusText: TextView
     private lateinit var pulse: TextView
     private lateinit var clusterView: ClusterView
-    private val pulseAnim by lazy {
-        android.animation.ObjectAnimator.ofFloat(pulse, "alpha", 1f, 0.25f).apply {
-            duration = 700; repeatCount = android.animation.ValueAnimator.INFINITE
-            repeatMode = android.animation.ValueAnimator.REVERSE
-        }
-    }
-    /** tok/s del coordinatore di questo telefono, letti da /metrics fuori dal main thread */
-    @Volatile private var localTokS = 0.0
     private lateinit var workerSwitch: Switch
     private lateinit var nodesTitle: TextView
     private lateinit var nodesBox: LinearLayout
@@ -53,44 +37,71 @@ class MainActivity : Activity() {
     private lateinit var apiStatus: TextView
     private lateinit var chatBtn: Button
     private lateinit var logView: TextView
+    private lateinit var modeReplica: RadioButton
+    private lateinit var coordChoice: Spinner
 
     private lateinit var discovery: Discovery
     private var nodes = listOf<Node>()
-    /** endpoint dei nodi deselezionati dall'utente (di default tutti selezionati) */
     private val excluded = mutableSetOf<String>()
-    /** voci dello spinner: file locali o preset da scaricare */
     private var modelItems = listOf<Any>()
     @Volatile private var downloading = false
-    /** worker remoti su cui è stata avviata una replica (per fermarle) */
     private var replicaHosts = listOf<String>()
-    private lateinit var modeReplica: RadioButton
-    private lateinit var coordChoice: Spinner
-    /** voci del menu coordinatore: COORD_AUTO, COORD_SELF o devId di un nodo */
     private var coordKeys = listOf<String>()
+    private var nodesShown = listOf<String>()
+    private var modelLabels = listOf<String>()
+
+    @Volatile private var localTokS = 0.0
+    private val pulseAnim by lazy {
+        android.animation.ObjectAnimator.ofFloat(pulse, "alpha", 1f, 0.25f).apply {
+            duration = 700; repeatCount = android.animation.ValueAnimator.INFINITE
+            repeatMode = android.animation.ValueAnimator.REVERSE
+        }
+    }
 
     private val prefs by lazy { getSharedPreferences("distai", MODE_PRIVATE) }
+    
+    // 当前语言状态
+    private var isZh by lazy { prefs.getBoolean("isZh", true) }
+
     private val stateListener: () -> Unit = { render() }
+
+    // 新增：选择本地模型文件的 Launcher
+    private val pickModelLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        uri?.let {
+            thread {
+                try {
+                    val fileName = getFileNameFromUri(it) ?: "local_model_${System.currentTimeMillis()}.gguf"
+                    val destFile = File(ModelStore.list(this).firstOrNull()?.parentFile ?: filesDir, fileName)
+                    contentResolver.openInputStream(it)?.use { input ->
+                        destFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    runOnUiThread {
+                        refreshModels(destFile)
+                        Toast.makeText(this, if (isZh) "本地模型已导入" else "Local model imported", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    runOnUiThread {
+                        Toast.makeText(this, if (isZh) "导入失败: ${e.message}" else "Import failed: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        
         info = findViewById(R.id.info)
         statusCard = findViewById(R.id.statusCard)
         statusText = findViewById(R.id.statusText)
         pulse = findViewById(R.id.pulse)
         clusterView = findViewById(R.id.clusterView)
-        
-        // 删除了 Lang.load 和国旗点击事件，防止因找不到 R.id.flagIt 而崩溃
-        
         workerSwitch = findViewById(R.id.workerSwitch)
         nodesTitle = findViewById(R.id.nodesTitle)
         nodesBox = findViewById(R.id.nodes)
-        findViewById<TextView>(R.id.nodesLegend).text = android.text.SpannableStringBuilder().also { sb ->
-            icons(listOf(R.drawable.ic_home), "coordinatore     ", sb)
-            icons(listOf(R.drawable.ic_wifi), "Wi-Fi     ", sb)
-            icons(listOf(R.drawable.ic_usb), "USB     ", sb)
-            icons(listOf(R.drawable.ic_wifi, R.drawable.ic_usb), "entrambi", sb)
-        }
         modelSpinner = findViewById(R.id.model)
         customUrl = findViewById(R.id.customUrl)
         progress = findViewById(R.id.progress)
@@ -101,23 +112,25 @@ class MainActivity : Activity() {
         chatBtn = findViewById(R.id.chatBtn)
         logView = findViewById(R.id.log)
         modeReplica = findViewById(R.id.modeReplica)
+        coordChoice = findViewById(R.id.coordChoice)
+
         if (prefs.getBoolean("replica", false)) modeReplica.isChecked = true
         modeReplica.setOnCheckedChangeListener { _, v -> prefs.edit().putBoolean("replica", v).apply() }
-        coordChoice = findViewById(R.id.coordChoice)
+        
         coordChoice.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
                 coordKeys.getOrNull(pos)?.let { prefs.edit().putString("coord", it).apply() }
             }
             override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
         }
-        renderCoordChoice()
-        findViewById<Button>(R.id.benchBtn).setOnClickListener { onBench() }
 
+        findViewById<Button>(R.id.benchBtn).setOnClickListener { onBench() }
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
 
         workerSwitch.setOnClickListener {
             NodeService.send(this, if (workerSwitch.isChecked) NodeService.ACTION_WORKER_START else NodeService.ACTION_WORKER_STOP)
         }
+
         findViewById<CheckBox>(R.id.moeFast).apply {
             isChecked = prefs.getBoolean("moefast", false)
             setOnCheckedChangeListener { _, v -> prefs.edit().putBoolean("moefast", v).apply() }
@@ -131,6 +144,7 @@ class MainActivity : Activity() {
             applyKeepScreen(isChecked)
             setOnCheckedChangeListener { _, v -> prefs.edit().putBoolean("keepscreen", v).apply(); applyKeepScreen(v) }
         }
+
         findViewById<Button>(R.id.battery).setOnClickListener { askBatteryExemption() }
         findViewById<Button>(R.id.freeRam).setOnClickListener { onFreeRam(it as Button) }
         findViewById<Button>(R.id.addIp).setOnClickListener {
@@ -140,16 +154,43 @@ class MainActivity : Activity() {
                 val host = txt.substringBefore(':')
                 val port = txt.substringAfter(':', "").toIntOrNull() ?: Native.RPC_PORT
                 discovery.addManual(host, port)
-                // salvati: prima si perdevano a ogni riavvio dell'app
                 prefs.edit().putStringSet("manual", (prefs.getStringSet("manual", emptySet()).orEmpty() + "$host:$port")).apply()
                 f.text.clear()
-                f.clearFocus() // con il focus il campo riportava la pagina su di sé a ogni aggiornamento
+                f.clearFocus()
             }
         }
         downloadBtn.setOnClickListener { onDownload() }
         coordBtn.setOnClickListener { onCoordinator() }
         chatBtn.setOnClickListener { startActivity(Intent(this, ChatActivity::class.java)) }
         findViewById<Button>(R.id.clearLog).setOnClickListener { NodeState.clearLog() }
+        
+        // 绑定浏览本地模型按钮
+        findViewById<Button>(R.id.browseModel).setOnClickListener {
+            pickModelLauncher.launch("*/*")
+        }
+
+        // 国旗点击事件：切换语言并保存状态，立刻重绘界面
+        findViewById<View>(R.id.flagZh).setOnClickListener {
+            if (!isZh) {
+                isZh = true
+                prefs.edit().putBoolean("isZh", true).apply()
+                applyLanguage()
+                render()
+                renderNodes()
+                renderCoordChoice()
+            }
+        }
+        findViewById<View>(R.id.flagEn).setOnClickListener {
+            if (isZh) {
+                isZh = false
+                prefs.edit().putBoolean("isZh", false).apply()
+                applyLanguage()
+                render()
+                renderNodes()
+                renderCoordChoice()
+            }
+        }
+
         ctxField.setText(prefs.getInt("ctx", 4096).toString())
 
         discovery = Discovery(this) { nodes = it; renderNodes(); refreshModels() }
@@ -158,13 +199,53 @@ class MainActivity : Activity() {
         }
         refreshModels()
 
-        // in negozio: si installa l'APK, si apre l'app e il telefono è già un worker
         if (savedInstanceState == null && prefs.getBoolean("autostart", true) && !NodeState.workerRunning) {
             NodeService.send(this, NodeService.ACTION_WORKER_START)
         }
+        
+        applyLanguage() // 初始化语言
     }
 
-    /** ogni 5 s rilegge /status dei nodi: RAM libera e ruolo (coordinatore, replica, worker) restano aggiornati */
+    // 动态设置所有静态 UI 的文字
+    private fun applyLanguage() {
+        findViewById<View>(R.id.flagZh).alpha = if (isZh) 1f else 0.35f
+        findViewById<View>(R.id.flagEn).alpha = if (isZh) 0.35f else 1f
+
+        findViewById<TextView>(R.id.workerTitle).text = if (isZh) "此手机作为工作节点" else "THIS PHONE AS WORKER"
+        findViewById<TextView>(R.id.workerHint).text = if (isZh) "提供CPU和RAM用于计算。请在局域网内所有手机上开启。" else "Provides CPU and RAM for compute. Enable on all network phones."
+        workerSwitch.text = if (isZh) "开启工作节点" else "Worker active"
+        findViewById<CheckBox>(R.id.autoStart).text = if (isZh) "应用启动时自动运行" else "Auto-start worker on app launch"
+        findViewById<CheckBox>(R.id.keepScreen).text = if (isZh) "保持屏幕常亮 (防休眠)" else "Keep screen on (prevents standby)"
+        findViewById<Button>(R.id.battery).text = if (isZh) "关闭电池优化" else "Disable battery optimization"
+        findViewById<Button>(R.id.freeRam).text = if (isZh) "释放内存 (结束后台应用)" else "Free RAM (closes background apps)"
+
+        findViewById<TextView>(R.id.coordTitle).text = if (isZh) "协调器" else "COORDINATOR"
+        findViewById<TextView>(R.id.coordHint).text = if (isZh) "选择节点，加载模型并将层分配到各手机。" else "Selects nodes, loads model, and distributes layers across phones."
+        findViewById<EditText>(R.id.manualIp).hint = if (isZh) "手动输入IP (例如 192.168.1.23)" else "Manual IP (e.g. 192.168.1.23)"
+        findViewById<Button>(R.id.addIp).text = if (isZh) "添加" else "Add"
+        
+        findViewById<TextView>(R.id.modelTitle).text = if (isZh) "模型" else "Model"
+        customUrl.hint = if (isZh) "...或输入 .gguf 链接" else "...or URL to a .gguf file"
+        downloadBtn.text = if (isZh) "下载模型" else "Download model"
+        
+        findViewById<TextView>(R.id.ctxTitle).text = if (isZh) "上下文 (token): " else "Context (tokens): "
+        
+        findViewById<RadioButton>(R.id.modeSplit).text = if (isZh) "Split模式: 大模型切分至多台手机" else "Split: large model split across phones"
+        modeReplica.text = if (isZh) "Replica模式: 模型复制到每台手机 (多用户)" else "Replica: model copied to each phone (multi-user)"
+        
+        findViewById<CheckBox>(R.id.moeFast).text = if (isZh) "快速MoE: 选8个中的6个专家 (提速12-25%，质量相同)" else "Fast MoE: 6 of 8 experts (Qwen3+12-25% tok/s, same quality)"
+        
+        findViewById<TextView>(R.id.coordChoiceTitle).text = if (isZh) "协调器: " else "Coordinator: "
+        findViewById<Button>(R.id.benchBtn).text = if (isZh) "节点测速" else "Benchmark node speed"
+        chatBtn.text = if (isZh) "打开对话" else "Open chat"
+        
+        findViewById<TextView>(R.id.logTitle).text = if (isZh) "日志" else "Log"
+        findViewById<Button>(R.id.clearLog).text = if (isZh) "清空" else "Clear"
+        
+        // 更新节点标题的默认显示
+        nodesTitle.text = if (isZh) "发现节点: 0" else "Nodes found: 0"
+    }
+
     private val statusTick = object : Runnable {
         override fun run() {
             discovery.refreshAll()
@@ -194,42 +275,42 @@ class MainActivity : Activity() {
         super.onStop()
     }
 
-    // ---------------------------------------------------------------- render
-
     private fun render() {
         renderStatus()
         info.text = Native.summary(this) + SelfBench.describe(SelfBench.result).let { if (it.isEmpty()) "" else "\n$it" } +
-            if (SelfBench.running) "\n⏳ bench di questo dispositivo in corso… / 设备测速中..." else ""
+            if (SelfBench.running) (if (isZh) "\n⏳ 设备测速中..." else "\n⏳ bench in progress...") else ""
+        
         workerSwitch.isChecked = NodeState.workerRunning
-        coordBtn.text = if (NodeState.coordinatorRunning) "Stop Distributed LLM / 停止分布式大模型" else "Start Distributed LLM / 启动分布式大模型"
+        coordBtn.text = if (NodeState.coordinatorRunning) 
+            (if (isZh) "停止分布式大模型" else "Stop Distributed LLM") 
+        else 
+            (if (isZh) "启动分布式大模型" else "Start Distributed LLM")
+            
         coordBtn.backgroundTintList = android.content.res.ColorStateList.valueOf(
             if (NodeState.coordinatorRunning) 0xFFC62828.toInt() else 0xFF2E7D32.toInt())
         chatBtn.isEnabled = NodeState.apiReady
         val routerInfo = NodeState.router?.status()?.optJSONArray("replicas")?.let { a ->
             val list = (0 until a.length()).map { a.getJSONObject(it) }
-            "\nReplicas ready / 副本就绪 ${list.count { it.optBoolean("healthy") }}/${list.size}: " +
+            "\n" + (if (isZh) "副本就绪" else "Replicas ready") + " ${list.count { it.optBoolean("healthy") }}/${list.size}: " +
                 list.joinToString(" · ") { "${it.optString("host")} ${if (it.optBoolean("healthy")) "✓" else "…"} (${it.optInt("served")} resp.)" }
         }.orEmpty()
+        
         apiStatus.text = when {
             NodeState.apiReady ->
                 "✅ ${NodeState.coordinatorInfo}\nOpenAI API: http://${Native.localIp()}:${Native.API_PORT}/v1 " +
-                    "(usable from PC on the same network / 局域网PC可用)" + routerInfo
-            NodeState.coordinatorRunning -> "⏳ Distributing model to nodes... / 正在向节点分发模型... (${NodeState.coordinatorInfo})$routerInfo"
+                    (if (isZh) "(局域网PC可用)" else "(usable from PC)") + routerInfo
+            NodeState.coordinatorRunning -> (if (isZh) "⏳ 正在向节点分发模型..." else "⏳ Distributing model...") + " (${NodeState.coordinatorInfo})$routerInfo"
             else -> ""
         } + if (NodeState.planInfo.isNotEmpty() && (NodeState.coordinatorRunning || NodeState.router != null))
             "\n\n📋 ${NodeState.planInfo}" else ""
+            
         logView.text = NodeState.logText().lines().takeLast(40).joinToString("\n")
     }
 
-    /**
-     * Card in alto: dispositivi collegati, stato del modello (caricamento / operativo con tok/s) e cosa sta facendo
-     * questo telefono. Verde = modello operativo, giallo = caricamento, il pallino pulsa quando qualcosa calcola.
-     */
     private fun renderRing() {
         val palette = intArrayOf(0xFF1E88E5.toInt(), 0xFF8E24AA.toInt(), 0xFF00A870.toInt(), 0xFFF9A825.toInt(), 0xFFE53935.toInt(), 0xFF546E7A.toInt())
         val plan = NodeState.plan?.takeIf { NodeState.coordinatorRunning || NodeState.apiReady }
         val segs = if (plan != null) {
-            // piano reale: MB e layer di ogni nodo; la CPU è quella misurata dal worker (-1 = dato non disponibile)
             listOf(ClusterView.Seg(NodeState.planCoord, plan.needMb[0], plan.localLayers, CoordStats.cpuPct, palette[0])) +
                 plan.remote.mapIndexed { i, n ->
                     val live = nodes.firstOrNull { it.endpoint == n.endpoint } ?: n
@@ -237,7 +318,6 @@ class MainActivity : Activity() {
                         if (live.clients > 0) live.cpuPct else 0, palette[(i + 1) % palette.size])
                 }
         } else {
-            // senza piano: i pesi che ogni worker tiene davvero in RAM
             val me = Native.localIp()
             nodeGroups().mapIndexedNotNull { i, g ->
                 val n = g.first()
@@ -247,46 +327,50 @@ class MainActivity : Activity() {
             }
         }
         val tok = if (NodeState.apiReady) localTokS else nodes.firstOrNull { it.role == "coordinatore" && it.apiReady }?.tokS ?: 0.0
-        clusterView.set(segs, tok, if (plan != null) "${plan.layers} layer" else "weights in workers / worker 权重")
+        val ringText = if (plan != null) "${plan.layers} layer" else (if (isZh) "worker 权重" else "weights in workers")
+        clusterView.set(segs, tok, ringText)
     }
 
     private fun renderStatus() {
         renderRing()
-        // 删除了原先在这里重复设置语言和国旗透明度的代码
+        findViewById<TextView>(R.id.statusTitle).text = if (isZh) "集群状态" else "CLUSTER STATUS"
         
         val myIp = Native.localIp()
         val others = nodeGroups().filter { g -> g.none { isSelf(it, myIp) } }
         val names = others.joinToString(", ") { g -> g.first().name.removePrefix("PC ") }
-        val devices = "📱 Connected devices / 已连接设备: ${others.size + 1}" + if (names.isNotEmpty()) " (this + $names / 此设备 + $names)" else " (this one only / 仅此设备)"
+        val devices = "📱 " + (if (isZh) "已连接设备" else "Connected devices") + ": ${others.size + 1}" + 
+            if (names.isNotEmpty()) (if (isZh) " (此设备 + $names)" else " (this + $names)") else (if (isZh) " (仅此设备)" else " (this one only)")
+            
         val remoteCoord = nodes.firstOrNull { it.role == "coordinatore" && !isSelf(it, myIp) }
         val tok = { t: Double -> if (t > 0) " · ${"%.1f".format(t)} tok/s" else "" }
+        
         val (model, color) = when {
-            NodeState.apiReady -> "🧠 Model running / 模型运行中 ✓ · ${NodeState.coordinatorInfo}${tok(localTokS)}" to 0xFFE8F5E9.toInt()
-            NodeState.coordinatorRunning -> "⏳ Loading the model onto nodes... / 正在加载模型... · ${NodeState.coordinatorInfo}" to 0xFFFFF8E1.toInt()
+            NodeState.apiReady -> "🧠 " + (if (isZh) "模型运行中" else "Model running") + " ✓ · ${NodeState.coordinatorInfo}${tok(localTokS)}" to 0xFFE8F5E9.toInt()
+            NodeState.coordinatorRunning -> "⏳ " + (if (isZh) "正在加载模型..." else "Loading model...") + " · ${NodeState.coordinatorInfo}" to 0xFFFFF8E1.toInt()
             remoteCoord?.apiReady == true ->
-                "🧠 Model running / 模型运行中 ✓ · ${remoteCoord.name}${tok(remoteCoord.tokS)}" to 0xFFE8F5E9.toInt()
-            remoteCoord != null -> "⏳ ${remoteCoord.name} is loading model / 正在加载模型" to 0xFFFFF8E1.toInt()
-            else -> "⚪ No model started / 未启动模型" to 0xFFFFFFFF.toInt()
+                "🧠 " + (if (isZh) "模型运行中" else "Model running") + " ✓ · ${remoteCoord.name}${tok(remoteCoord.tokS)}" to 0xFFE8F5E9.toInt()
+            remoteCoord != null -> "⏳ ${remoteCoord.name} " + (if (isZh) "正在加载模型" else "is loading model") to 0xFFFFF8E1.toInt()
+            else -> "⚪ " + (if (isZh) "未启动模型" else "No model started") to 0xFFFFFFFF.toInt()
         }
+        
         val busy = WorkerStats.clients > 0
         val worker = when {
-            !NodeState.workerRunning -> "⏸ This phone's worker is off / 此手机的 Worker 已关闭"
-            busy -> "⚙️ Working for cluster / 正在为集群工作 · weights / 权重 ${gb(WorkerStats.rssMb)} · CPU ${WorkerStats.cpuPct}%"
-            else -> "💤 Worker ready, waiting for coordinator / Worker 就绪，等待协调器"
+            !NodeState.workerRunning -> "⏸ " + (if (isZh) "此手机的 Worker 已关闭" else "This phone's worker is off")
+            busy -> "⚙️ " + (if (isZh) "正在为集群工作 · 权重" else "Working for cluster · weights") + " ${gb(WorkerStats.rssMb)} · CPU ${WorkerStats.cpuPct}%"
+            else -> "💤 " + (if (isZh) "Worker 就绪，等待协调器" else "Worker ready, waiting for coordinator")
         }
-        // telefoni che il PC espone col ponte USB (tools/pcnode.py): funzionano, ma ogni token passa anche dal PC
-        val viaPc = others.map { it.first().name }.filter { it.endsWith("(USB del PC)") }
+        
+        val viaPc = others.map { it.first().name }.filter { it.endsWith("(USB del PC)") || it.contains("(USB)") || it.contains("(via PC)") }
         val hint = if (viaPc.isEmpty()) null else
-            "🔌 ${viaPc.joinToString { it.removeSuffix(" (USB del PC)") }} connected via PC (USB): " +
-                "for less latency enable USB Tethering or put on the same network / 建议开启USB网络共享"
-        // questo telefono vede gli altri solo via cavo: tipicamente è su un'altra rete Wi-Fi
-        val onlyUsb = if (others.isNotEmpty() && others.all { g -> g.all { it.usb } })
-            "🔌 Connected to cluster only via USB: fine if it's the only phone; " +
-                "put it on the same network to work with other phones / 仅通过USB连接，建议置于同一局域网" else null
-        // misurato col Samsung (13/10/2026): cavo 30-237 MB/s (tethering, adb aggiornato), Wi-Fi 2 MB/s: la banda decide prompt e pesi
+            "🔌 ${viaPc.joinToString { it.replace(" (USB del PC)", "").replace(" (USB)", "") }} " + 
+                (if (isZh) "通过PC(USB)连接：建议开启USB网络共享以降低延迟" else "connected via PC (USB): enable USB Tethering for less latency")
+                
+        val onlyUsb = if (others.isNotEmpty() && others.all { g -> g.all { it.usb || it.cable } })
+            "🔌 " + (if (isZh) "仅通过USB连接：若有多台设备，请置于同一局域网" else "Connected via USB only: put on same network to work with others") else null
+            
         val wired = if (others.isNotEmpty() && !Native.wiredLink() && others.none { g -> g.any { it.usb || it.cable } })
-            "💡 Cable recommended: USB to PC with DistAI, USB Tethering or USB-C network adapter: " +
-                "15 to 100 times the Wi-Fi bandwidth / 推荐使用线缆直连" else null
+            "💡 " + (if (isZh) "推荐使用线缆直连以获得高带宽" else "Cable recommended: 15 to 100 times the Wi-Fi bandwidth") else null
+            
         statusText.text = listOfNotNull(devices, model, worker, hint, onlyUsb, wired).joinToString("\n")
         statusCard.backgroundTintList = android.content.res.ColorStateList.valueOf(color)
         val active = NodeState.coordinatorRunning || (busy && WorkerStats.cpuPct >= 10)
@@ -297,10 +381,6 @@ class MainActivity : Activity() {
 
     private fun gb(mb: Long) = if (mb >= 1024) "%.1f GB".format(mb / 1024.0) else "$mb MB"
 
-    /** chiavi dei nodi mostrati: la lista si ricostruisce solo se cambiano (ricostruirla faceva saltare la pagina) */
-    private var nodesShown = listOf<String>()
-
-    /** Voci dello stesso dispositivo (USB e Wi-Fi) raggruppate: una riga per nodo, con i suoi canali. */
     private fun nodeGroups(): List<List<Node>> = nodes.groupBy { it.devId.ifEmpty { it.endpoint } }.values.toList()
 
     private fun renderNodes() {
@@ -308,31 +388,32 @@ class MainActivity : Activity() {
         val sel = selectedNodes()
         val groups = nodeGroups()
         val keys = groups.map { g -> g.joinToString { it.endpoint } }
+        
         if (keys != nodesShown) {
             nodesShown = keys
             nodesBox.removeAllViews()
             for (g in groups) addNodeRow(g)
-        } else groups.forEachIndexed { i, g ->
-            // stesso elenco: aggiorno solo il testo (attività, RAM) senza toccare la selezione
-            (nodesBox.getChildAt(i) as? CheckBox)?.let { cb ->
-                val t = withLinkIcons(g, nodeText(g))
-                if (cb.text.toString() != t.toString()) cb.text = t
+        } else {
+            groups.forEachIndexed { i, g ->
+                (nodesBox.getChildAt(i) as? CheckBox)?.let { cb ->
+                    val t = withLinkIcons(g, nodeText(g))
+                    if (cb.text.toString() != t.toString()) cb.text = t
+                }
             }
         }
-        // RAM contata una volta per dispositivo, anche se ha due canali
+        
         sel.groupBy { it.devId.ifEmpty { it.endpoint } }.values.forEach { ram += it.first().freeMb }
         val devices = sel.map { it.devId.ifEmpty { it.endpoint } }.distinct().size
-        nodesTitle.text = "Nodes found: ${groups.size} / 发现节点: ${groups.size} · selected / 已选: $devices" +
+        nodesTitle.text = (if (isZh) "发现节点: ${groups.size} · 已选 $devices" else "Nodes found: ${groups.size} · selected $devices") +
             if (ram > 0) " · RAM ≈ ${"%.1f".format(ram / 1024.0)} GB" else ""
         renderCoordChoice()
     }
 
-    /** Icone del canale davanti al nome: Wi-Fi, USB (tridente) o entrambe (si usa il più rapido, l'altro è di riserva). */
     private fun withLinkIcons(g: List<Node>, text: String): CharSequence = icons(
         buildList {
             if (g.any { it.role == "coordinatore" }) add(R.drawable.ic_home)
             if (g.any { !it.usb && !it.cable }) add(R.drawable.ic_wifi)
-            if (g.any { it.usb || it.cable }) add(R.drawable.ic_usb) // adb o rete sul cavo (tethering, Ethernet)
+            if (g.any { it.usb || it.cable }) add(R.drawable.ic_usb)
         }, text)
 
     private fun icons(icons: List<Int>, text: CharSequence, sb: android.text.SpannableStringBuilder = android.text.SpannableStringBuilder()): CharSequence {
@@ -351,18 +432,14 @@ class MainActivity : Activity() {
     private fun nodeText(g: List<Node>): String {
         val n = g.first()
         val mem = if (n.ramMb > 0) " · RAM ${"%.1f".format(n.ramMb / 1024.0)} GB" else ""
-        // il coordinatore ha l'icona della casa; gli altri ruoli restano scritti
         val role = g.map { it.role }.firstOrNull { it.isNotEmpty() && it != "coordinatore" }?.let { " · $it" }.orEmpty()
-        // velocità misurata da qui (canale compreso) o, se manca, il bench che il nodo ha pubblicato su se stesso
         val speed = g.mapNotNull { Cluster.bench[it.endpoint] }.maxByOrNull { it.gbps }
             ?.let { " · ${"%.1f".format(it.gbps)} GB/s" }
             ?: g.firstOrNull { it.benchGbps > 0 }?.let { " · bench ${"%.1f".format(it.benchGbps)} GB/s ${"%.0f".format(it.benchGflops)} GFLOPS" }
             ?: ""
-        // round-trip del canale più rapido (quello che userà il cluster)
         val rtt = g.mapNotNull { Cluster.bench[it.endpoint]?.rttMs }.minOrNull()?.let { " · rtt ${"%.0f".format(it)} ms" }.orEmpty()
-        // attività vista dal suo /status: un coordinatore collegato al worker = il nodo sta lavorando per il cluster
         val act = g.maxByOrNull { it.clients }?.takeIf { it.clients > 0 }
-            ?.let { "\n● in use / 使用中 · weights ${gb(it.workMb)} · CPU ${it.cpuPct}%" }.orEmpty()
+            ?.let { "\n● " + (if (isZh) "使用中" else "in use") + " · weights ${gb(it.workMb)} · CPU ${it.cpuPct}%" }.orEmpty()
         return "${n.name}\n${g.joinToString(" + ") { it.endpoint }}$mem" +
             "${if (n.cpu.isNotEmpty()) " · ${n.cpu}" else ""}$role$speed$rtt$act"
     }
@@ -378,34 +455,33 @@ class MainActivity : Activity() {
         nodesBox.addView(cb)
     }
 
-    /** Menu del coordinatore: automatico, questo telefono, o un nodo che sa fare da coordinatore (telefoni, PC). */
     private fun renderCoordChoice() {
-        val coordNodes = nodes.filter { it.canCoord && it.devId.isNotEmpty() && !isSelf(it, Native.localIp()) }
-            .distinctBy { it.devId }
+        val coordNodes = nodes.filter { it.canCoord && it.devId.isNotEmpty() && !isSelf(it, Native.localIp()) }.distinctBy { it.devId }
         val keys = listOf(Cluster.COORD_AUTO, Cluster.COORD_SELF) + coordNodes.map { it.devId }
-        if (keys == coordKeys) return // non ricreo il menu a ogni aggiornamento: perderebbe la scelta aperta
-        val labels = listOf("Auto (PC if available, else fastest) / 自动 (优先PC，否则最快)", "This phone / 此手机") +
-            coordNodes.map { "${it.name}${if (it.x86) " (PC)" else ""}" }
+        if (keys == coordKeys) return
+        val labels = listOf(
+            if (isZh) "自动 (优先PC，否则最快)" else "Auto (PC if available, else fastest)", 
+            if (isZh) "此手机" else "This phone"
+        ) + coordNodes.map { "${it.name}${if (it.x86) " (PC)" else ""}" }
         coordKeys = keys
         coordChoice.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
         val saved = prefs.getString("coord", Cluster.COORD_AUTO)
         coordChoice.setSelection(keys.indexOf(saved).coerceAtLeast(0))
     }
 
-    /** Il worker locale e i nodi selezionati, con la RAM e il ruolo aggiornati da /status. */
     private fun clusterNodes(): Pair<Node, List<Node>> {
         val myIp = Native.localIp()
         val self = Discovery.refresh(Node("127.0.0.1", Native.RPC_PORT, Native.deviceName()))
-            .copy(name = "${Native.deviceName()} (questo / this)", freeMb = Native.memInfo(this).second)
+            .copy(name = "${Native.deviceName()} ${if (isZh) "(此设备)" else "(this)"}", freeMb = Native.memInfo(this).second)
         val others = selectedNodes().filter { !isSelf(it, myIp) }.filter { n ->
-            Discovery.reachable(n).also { if (!it) NodeState.log("coord", "node unreachable / 节点无法访问: ${n.endpoint}") }
+            Discovery.reachable(n).also { if (!it) NodeState.log("coord", (if (isZh) "节点无法访问: " else "node unreachable: ") + n.endpoint) }
         }.map { Discovery.refresh(it) }
         return self to others
     }
 
     private fun onBench() {
-        if (NodeState.coordinatorRunning) return toast("Stop the LLM first / 请先停止 LLM")
-        toast("Benchmarking nodes (about 1s each)… / 正在测试节点速度 (每个约1秒)…")
+        if (NodeState.coordinatorRunning) return toast(if (isZh) "请先停止 LLM" else "Stop the LLM first")
+        toast(if (isZh) "正在测试节点速度..." else "Benchmarking nodes...")
         thread(name = "bench") {
             val (self, others) = clusterNodes()
             Cluster(this).measure(listOf(self) + others)
@@ -415,38 +491,49 @@ class MainActivity : Activity() {
 
     private fun selectedNodes() = nodes.filter { it.endpoint !in excluded }
 
-    /** Il worker di questo telefono. Un 127.0.0.1 su un'altra porta è un nodo via USB (es. il PC con adb reverse). */
     private fun isSelf(n: Node, myIp: String?) =
-        n.host == myIp || (n.host == "127.0.0.1" && n.port == Native.RPC_PORT) ||
-            // anche esposto da un PC (ponte USB "(USB del PC)" o "(via PC)"): stesso nome e RAM di questo telefono
-            n.devId == selfDevId
+        n.host == myIp || (n.host == "127.0.0.1" && n.port == Native.RPC_PORT) || n.devId == selfDevId
 
-    /** come Node.devId per questo telefono (dev/ram di StatusServer.status) */
     private val selfDevId by lazy { "${Native.deviceName()}/${Native.memInfo(this).first}" }
 
-    // ---------------------------------------------------------------- modelli
-
-    /** Modello che sta solo su un PC del cluster (tools/pcnode.py): si usa con quel PC come coordinatore, senza copiarlo qui. */
     data class RemoteModel(val name: String, val size: Long, val node: Node)
 
-    private var modelLabels = listOf<String>()
+    // 辅助函数：从 Uri 获取文件名
+    private fun getFileNameFromUri(uri: Uri): String? {
+        var result: String? = null
+        if (uri.scheme == "content") {
+            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (index != -1) result = cursor.getString(index)
+                }
+            }
+        }
+        if (result == null) {
+            result = uri.path
+            val cut = result?.lastIndexOf('/')
+            if (cut != -1 && cut != null) result = result?.substring(cut + 1)
+        }
+        return result
+    }
 
     private fun refreshModels(select: File? = null) {
         val local = ModelStore.list(this)
         val missing = ModelStore.presets.filter { p -> local.none { it.name == p.url.substringAfterLast('/') } }
         val onPc = nodes.filter { it.canCoord && it.x86 && it.models.isNotEmpty() && !isSelf(it, Native.localIp()) }
-            .sortedBy { if (it.usb) 1 else 0 } // a parità di PC il canale su rete (tethering, Wi-Fi), non adb
+            .sortedBy { if (it.usb) 1 else 0 }
             .flatMap { n -> n.models.map { (name, size) -> RemoteModel(name, size, n) } }
             .filter { r -> local.none { it.name == r.name } }.distinctBy { it.name }
         val items = local + onPc + missing.filter { p -> onPc.none { it.name == p.url.substringAfterLast('/') } }
+        
         val labels = items.map {
             when (it) {
                 is File -> "📁 ${it.name} (${"%.1f".format(it.length() / 1e9)} GB)"
-                is RemoteModel -> "🖥 ${it.name} (${"%.1f".format(it.size / 1e9)} GB, on / 在 ${it.node.name.removeSuffix(" (USB)").removeSuffix(" (cavo)")})"
+                is RemoteModel -> "🖥 ${it.name} (${"%.1f".format(it.size / 1e9)} GB, " + (if (isZh) "在 " else "on ") + "${it.node.name.removeSuffix(" (USB)").removeSuffix(" (cavo)")})"
                 else -> "⬇ ${(it as ModelStore.Preset).label}"
             }
         }
-        if (select == null && labels == modelLabels) return // stesso elenco: non tocco lo spinner (perderebbe la scelta)
+        if (select == null && labels == modelLabels) return
         val previous = modelLabels.getOrNull(modelSpinner.selectedItemPosition)
         modelItems = items
         modelLabels = labels
@@ -461,9 +548,9 @@ class MainActivity : Activity() {
         val url = customUrl.text.toString().trim().ifEmpty {
             (modelItems.getOrNull(modelSpinner.selectedItemPosition) as? ModelStore.Preset)?.url
         }
-        if (url == null) { toast("The selected model is already on the phone / 所选模型已在手机上"); return }
+        if (url == null) { toast(if (isZh) "所选模型已在手机上" else "The selected model is already on the phone"); return }
         downloading = true
-        downloadBtn.text = "Cancel download / 取消下载"
+        downloadBtn.text = if (isZh) "取消下载" else "Cancel download"
         progress.visibility = View.VISIBLE
         progress.isIndeterminate = true
         thread(name = "download") {
@@ -475,21 +562,19 @@ class MainActivity : Activity() {
                             progress.max = 1000
                             progress.progress = (done * 1000 / total).toInt()
                         }
-                        downloadBtn.text = "Cancel / 取消下载 (${done / 1048576} / ${if (total > 0) total / 1048576 else "?"} MB)"
+                        downloadBtn.text = (if (isZh) "取消 (" else "Cancel (") + "${done / 1048576} / ${if (total > 0) total / 1048576 else "?"} MB)"
                     }
                 }
             }
             runOnUiThread {
                 downloading = false
-                downloadBtn.text = "Download model / 下载模型"
+                downloadBtn.text = if (isZh) "下载模型" else "Download model"
                 progress.visibility = View.GONE
-                result.onSuccess { customUrl.text.clear(); refreshModels(it); toast("Downloaded / 已下载 ${it.name}") }
-                    .onFailure { toast("Download error / 下载错误: ${it.message}") }
+                result.onSuccess { customUrl.text.clear(); refreshModels(it); toast((if (isZh) "已下载 " else "Downloaded ") + it.name) }
+                    .onFailure { toast((if (isZh) "下载错误: " else "Download error: ") + it.message) }
             }
         }
     }
-
-    // ---------------------------------------------------------- coordinatore
 
     private fun onCoordinator() {
         if (NodeState.coordinatorRunning) {
@@ -503,12 +588,12 @@ class MainActivity : Activity() {
         val item = modelItems.getOrNull(modelSpinner.selectedItemPosition)
         val remote = item as? RemoteModel
         val model = item as? File ?: remote?.let { File(cacheDir, it.name) }
-            ?: return toast("Select a downloaded model / 请选择已下载的模型")
+            ?: return toast(if (isZh) "请选择已下载的模型" else "Select a downloaded model")
         val ctx = ctxField.text.toString().toIntOrNull()?.coerceIn(512, 131072) ?: 4096
         prefs.edit().putInt("ctx", ctx).apply()
 
         if (modeReplica.isChecked) {
-            if (remote != null) return toast("Download model first for replica / 请先下载模型再使用副本模式")
+            if (remote != null) return toast(if (isZh) "请先下载模型" else "Download model first")
             return startReplicas(model, ctx)
         }
         val choice = prefs.getString("coord", Cluster.COORD_AUTO) ?: Cluster.COORD_AUTO
@@ -516,35 +601,27 @@ class MainActivity : Activity() {
         thread(name = "cluster") {
             val (self, others) = clusterNodes()
             val cluster = Cluster(this)
-            // modello del PC: leggo solo l'intestazione e il PC fa da coordinatore con il suo file
             val remoteInfo = remote?.let { r ->
-                NodeState.log("cluster", "${r.name} is on / 位于 ${r.node.name}: reading header, PC will coordinate / 正在读取头部，PC将作为协调器")
+                NodeState.log("cluster", "${r.name} " + (if (isZh) "位于" else "is on") + " ${r.node.name}: " + (if (isZh) "PC将作为协调器" else "PC will coordinate"))
                 Cluster.remoteInfo(r.node, r.name, r.size, cacheDir)?.second?.let { it to r.node.devId }
-                    ?: run { NodeState.log("cluster", "cannot read header of / 无法读取头部 ${r.name}"); null }
+                    ?: run { NodeState.log("cluster", (if (isZh) "无法读取头部 " else "cannot read header ") + r.name); null }
             }
-            val start = if (remote != null && remoteInfo == null) null
-                else cluster.plan(model, ctx, self, others, choice, remoteInfo)
+            val start = if (remote != null && remoteInfo == null) null else cluster.plan(model, ctx, self, others, choice, remoteInfo)
             runOnUiThread {
                 coordBtn.isEnabled = true
                 renderNodes()
-                if (start == null) toast("Start failed, see log / 启动失败，请查看日志")
+                if (start == null) toast(if (isZh) "启动失败，请查看日志" else "Start failed, see log")
             }
             if (start != null) {
-                // MoE veloce: solo per l'architettura provata (qwen3moe: 21/22 compiti con 6 esperti, come con 8)
                 val experts = if (prefs.getBoolean("moefast", false) && start.info.arch == "qwen3moe") 6 else 0
                 cluster.launch(start, experts = experts)
-                // modello predittivo: solo se misura e stima dicono che conviene
                 cluster.tuneSpeculative(start)
             }
         }
     }
 
-    /**
-     * Modalità repliche: il modello intero gira su ogni telefono in cui entra; i worker lo copiano
-     * da questo telefono via LAN (/files) se non ce l'hanno, e il router smista gli utenti.
-     */
     private fun startReplicas(model: File, ctx: Int) {
-        val myIp = Native.localIp() ?: return toast("No network / 无网络")
+        val myIp = Native.localIp() ?: return toast(if (isZh) "无网络" else "No network")
         val candidates = selectedNodes().filter { it.host != myIp && it.host != "127.0.0.1" }
         coordBtn.isEnabled = false
         thread(name = "replicas") {
@@ -553,7 +630,7 @@ class MainActivity : Activity() {
             val localOk = fits(Native.memInfo(this).second)
             val remote = candidates.map { Discovery.refresh(it) }.filter { n ->
                 val ok = Discovery.reachable(n) && fits(n.freeMb)
-                if (!ok) NodeState.log("coord", "${n.host} excluded / 已排除: unreachable or insufficient RAM / 无法访问或内存不足 (${n.freeMb} MB free)")
+                if (!ok) NodeState.log("coord", "${n.host} " + (if (isZh) "已排除: 无法访问或内存不足" else "excluded: unreachable or low RAM") + " (${n.freeMb} MB free)")
                 ok
             }
             val source = "http://$myIp:${Native.STATUS_PORT}/files/${Uri.encode(model.name)}"
@@ -563,10 +640,10 @@ class MainActivity : Activity() {
             }.map { it.host }
             runOnUiThread {
                 coordBtn.isEnabled = true
-                if (info == null) return@runOnUiThread toast("Cannot read GGUF / 无法读取 GGUF 文件")
+                if (info == null) return@runOnUiThread toast(if (isZh) "无法读取 GGUF 文件" else "Cannot read GGUF")
                 val hosts = (if (localOk) listOf("127.0.0.1") else emptyList()) + started
-                if (hosts.isEmpty()) return@runOnUiThread toast("Model doesn't fit, use Split mode / 内存不足，请使用拆分模式")
-                if (!localOk) NodeState.log("coord", "this phone has no RAM for replica: router only / 此手机内存不足，仅作为路由")
+                if (hosts.isEmpty()) return@runOnUiThread toast(if (isZh) "内存不足，请使用拆分模式" else "Model doesn't fit, use Split mode")
+                if (!localOk) NodeState.log("coord", if (isZh) "内存不足，仅作为路由" else "no RAM for replica: router only")
                 replicaHosts = started
                 Keepalive.pin(started)
                 if (localOk) NodeService.send(this, NodeService.ACTION_REPLICA_START) {
@@ -577,18 +654,15 @@ class MainActivity : Activity() {
                     putStringArrayListExtra(NodeService.EXTRA_HOSTS, ArrayList(hosts))
                     putExtra(NodeService.EXTRA_MODEL, model.name)
                 }
-                NodeState.log("coord", "replicas started on / 副本已启动于: ${hosts.joinToString()}")
+                NodeState.log("coord", (if (isZh) "副本已启动于: " else "replicas started on: ") + hosts.joinToString())
             }
         }
     }
 
-    // ---------------------------------------------------------------- varie
-
     @SuppressLint("BatteryLife")
-    /** Chiude i processi in background delle altre app e mostra quanta RAM disponibile si è guadagnata (serve prima di caricare un modello). */
     private fun onFreeRam(btn: Button) {
         btn.isEnabled = false
-        toast("Freeing RAM... / 正在释放内存...")
+        toast(if (isZh) "正在释放内存..." else "Freeing RAM...")
         thread {
             val r = MemoryCleaner.free(this)
             runOnUiThread { btn.isEnabled = true; toast(r.describe()) }
@@ -597,11 +671,10 @@ class MainActivity : Activity() {
 
     private fun askBatteryExemption() {
         val pm = getSystemService(POWER_SERVICE) as PowerManager
-        if (pm.isIgnoringBatteryOptimizations(packageName)) return toast("Already exempt / 已忽略电池优化")
+        if (pm.isIgnoringBatteryOptimizations(packageName)) return toast(if (isZh) "已忽略电池优化" else "Already exempt")
         startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
     }
 
-    /** Alcuni telefoni (es. Huawei) vanno in standby e sospendono la rete anche con wake lock: lo schermo acceso lo evita. */
     private fun applyKeepScreen(on: Boolean) {
         if (on) window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
